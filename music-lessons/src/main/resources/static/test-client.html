@@ -1,0 +1,362 @@
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Music Lesson Booking</title>
+        <style>
+            body { font-family: sans-serif; max-width: 860px; margin: 20px auto; }
+            fieldset { margin-bottom: 14px; }
+            input, select, button { margin: 3px; }
+            .views button { padding: 6px 14px; font-weight: bold; }
+            .views button.active { background: #333; color: #fff; }
+            table { border-collapse: collapse; margin-top: 6px; }
+            th, td { border: 1px solid #999; padding: 4px 10px; text-align: left; }
+            .message { padding: 8px; margin: 10px 0; background: #eef; border: 1px solid #99c; }
+            .message.error { background: #fee; border-color: #c99; }
+            pre { background: #f4f4f4; padding: 8px; white-space: pre-wrap; }
+        </style>
+    </head>
+    <body>
+    <h2>Music Lesson Booking</h2>
+
+    <div class="views">
+        <button id="pupilTab" onclick="showView('pupil')">Pupil View</button>
+        <button id="tutorTab" onclick="showView('tutor')">Tutor View</button>
+    </div>
+
+    <div id="message" class="message" style="display:none"></div>
+
+    <div id="pupilView">
+        <fieldset>
+            <legend>Pupil</legend>
+            <input id="matric" placeholder="matriculation number" oninput="clearPupilResults()">
+            <input id="name" placeholder="name" oninput="clearPupilResults()">
+        </fieldset>
+
+        <fieldset>
+            <legend>Available slots</legend>
+            <select id="slotTutor" onchange="fillInstruments()"></select>
+            <select id="slotInstrument"></select>
+            <input id="slotDate" type="date">
+            <button onclick="showSlots()">show slots</button>
+            <div id="slots"></div>
+        </fieldset>
+
+        <fieldset>
+            <legend>Book a lesson</legend>
+            <input id="bookTutor" placeholder="tutor" readonly>
+            <input id="bookInstrument" placeholder="instrument" readonly>
+            <input id="bookDate" placeholder="date" readonly>
+            <input id="bookTime" placeholder="time" readonly>
+            <button onclick="bookLesson()">book</button>
+        </fieldset>
+
+        <fieldset>
+            <legend>My bookings</legend>
+            <button onclick="showBookings()">view my bookings</button>
+            <div id="bookings"></div>
+        </fieldset>
+    </div>
+
+    <div id="tutorView" style="display:none">
+        <fieldset>
+            <legend>Tutor</legend>
+            <select id="tutorSelect"></select>
+            <input id="tutorKey" type="password" placeholder="tutor API key">
+            <input id="tutorDate" type="date">
+            <button onclick="showTutorBookings()">view booked lessons</button>
+            <div id="tutorBookings"></div>
+        </fieldset>
+    </div>
+
+    <h3>Last response</h3>
+    <pre id="response"></pre>
+
+    <script>
+        let tutors = [];
+        let selection = null;
+
+        function value(id) {
+            return document.getElementById(id).value.trim();
+        }
+
+        function showMessage(text, isError) {
+            const box = document.getElementById("message");
+            box.textContent = text;
+            box.className = isError ? "message error" : "message";
+            box.style.display = "block";
+        }
+
+        function formatDate(isoDate) {
+            const parts = isoDate.split("-");
+            return parts[2] + "/" + parts[1] + "/" + parts[0];
+        }
+
+        function todayIso() {
+            const now = new Date();
+            const month = String(now.getMonth() + 1).padStart(2, "0");
+            const day = String(now.getDate()).padStart(2, "0");
+            return now.getFullYear() + "-" + month + "-" + day;
+        }
+
+        function tutorName(tutorId) {
+            const tutor = tutors.find(candidate => candidate.id === tutorId);
+            return tutor ? tutor.name : tutorId;
+        }
+
+        function errorText(result) {
+            return (result.body && result.body.message) || ("Request failed with status " + result.status);
+        }
+
+        async function send(url, options) {
+            try {
+                const response = await fetch(url, options);
+                const text = await response.text();
+                document.getElementById("response").textContent = response.status + " " + text;
+                let body = null;
+                if (text) {
+                    try {
+                        body = JSON.parse(text);
+                    } catch (parseError) {
+                        body = null;
+                    }
+                }
+                return { ok: response.ok, status: response.status, body: body };
+            } catch (error) {
+                document.getElementById("response").textContent = "Error: " + error;
+                showMessage("Could not reach the booking service", true);
+                return null;
+            }
+        }
+
+        function renderTable(container, headers, rows) {
+            const table = document.createElement("table");
+            const headerRow = table.insertRow();
+            headers.forEach(text => {
+                const cell = document.createElement("th");
+                cell.textContent = text;
+                headerRow.appendChild(cell);
+            });
+            rows.forEach(row => {
+                const tableRow = table.insertRow();
+                row.forEach(item => {
+                    const cell = tableRow.insertCell();
+                    if (item instanceof Node) {
+                        cell.appendChild(item);
+                    } else {
+                        cell.textContent = item;
+                    }
+                });
+            });
+            container.appendChild(table);
+        }
+
+        function showView(view) {
+            document.getElementById("pupilView").style.display = view === "pupil" ? "block" : "none";
+            document.getElementById("tutorView").style.display = view === "tutor" ? "block" : "none";
+            document.getElementById("pupilTab").className = view === "pupil" ? "active" : "";
+            document.getElementById("tutorTab").className = view === "tutor" ? "active" : "";
+            document.getElementById("message").style.display = "none";
+        }
+
+        function pupilDetailsValid() {
+            if (!/^\d{6,}$/.test(value("matric")) || value("name") === "") {
+                showMessage("Enter a matriculation number (at least 6 digits, no letters), and a name", true);
+                return false;
+            }
+            return true;
+        }
+
+        function fillInstruments() {
+            const tutor = tutors.find(candidate => candidate.id === value("slotTutor"));
+            const select = document.getElementById("slotInstrument");
+            select.innerHTML = "";
+            Object.keys(tutor.gradeRanges).forEach(instrument => select.add(new Option(instrument, instrument)));
+        }
+
+        async function loadTutors() {
+            const result = await send("/tutors");
+            if (!result || !result.ok) {
+                showMessage("Could not load the tutors", true);
+                return;
+            }
+            tutors = result.body;
+            tutors.forEach(tutor => {
+                document.getElementById("slotTutor").add(new Option(tutor.name, tutor.id));
+                document.getElementById("tutorSelect").add(new Option(tutor.name, tutor.id));
+            });
+            fillInstruments();
+        }
+
+        function clearSelection() {
+            selection = null;
+            ["bookTutor", "bookInstrument", "bookDate", "bookTime"].forEach(id => {
+                document.getElementById(id).value = "";
+            });
+        }
+
+        function clearPupilResults() {
+            document.getElementById("bookings").innerHTML = "";
+            document.getElementById("slots").innerHTML = "";
+            clearSelection();
+        }
+
+        function selectSlot(tutorId, instrument, slot) {
+            selection = { tutorId: tutorId, instrument: instrument, date: slot.date, time: slot.time.substring(0, 5) };
+            document.getElementById("bookTutor").value = tutorName(tutorId);
+            document.getElementById("bookInstrument").value = instrument;
+            document.getElementById("bookDate").value = formatDate(slot.date);
+            document.getElementById("bookTime").value = selection.time;
+            showMessage("Slot selected. Click book to confirm.", false);
+        }
+
+        async function showSlots() {
+            if (!pupilDetailsValid()) {
+                return;
+            }
+            const tutorId = value("slotTutor");
+            const instrument = value("slotInstrument");
+            const url = "/tutors/" + encodeURIComponent(tutorId) + "/slots?date=" + encodeURIComponent(value("slotDate")) +
+                "&instrument=" + encodeURIComponent(instrument) + "&matric=" + encodeURIComponent(value("matric"));
+            const result = await send(url);
+            const container = document.getElementById("slots");
+            container.innerHTML = "";
+            if (!result) {
+                return;
+            }
+            if (!result.ok) {
+                showMessage(errorText(result), true);
+                return;
+            }
+            if (result.body.length === 0) {
+                container.textContent = "No free slots on that day";
+                return;
+            }
+            result.body.forEach(slot => {
+                const button = document.createElement("button");
+                button.textContent = slot.time.substring(0, 5);
+                button.onclick = () => selectSlot(tutorId, instrument, slot);
+                container.appendChild(button);
+            });
+        }
+
+        async function bookLesson() {
+            if (selection === null) {
+                showMessage("Click an available slot first", true);
+                return;
+            }
+            if (!pupilDetailsValid()) {
+                return;
+            }
+            const result = await send("/bookings", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    matric: value("matric"),
+                    name: value("name"),
+                    tutorId: selection.tutorId,
+                    instrument: selection.instrument,
+                    date: selection.date,
+                    time: selection.time
+                })
+            });
+            if (!result) {
+                return;
+            }
+            if (!result.ok) {
+                showMessage(errorText(result), true);
+                return;
+            }
+            showMessage("Booked " + selection.instrument + " with " + tutorName(selection.tutorId) +
+                " on " + formatDate(selection.date) + " at " + selection.time, false);
+            clearSelection();
+            await showSlots();
+        }
+
+        function cancelButton(bookingId) {
+            const button = document.createElement("button");
+            button.textContent = "cancel";
+            button.onclick = () => cancelBooking(bookingId);
+            return button;
+        }
+
+        async function showBookings() {
+            if (!pupilDetailsValid()) {
+                return;
+            }
+            const result = await send("/bookings?matric=" + encodeURIComponent(value("matric")) +
+                "&name=" + encodeURIComponent(value("name")));
+            const container = document.getElementById("bookings");
+            container.innerHTML = "";
+            if (!result) {
+                return;
+            }
+            if (!result.ok) {
+                showMessage(errorText(result), true);
+                return;
+            }
+            if (result.body.length === 0) {
+                container.textContent = "You have no bookings";
+                return;
+            }
+            renderTable(container, ["ID", "Date", "Time", "Tutor", "Instrument", "Grade", ""],
+                result.body.map(booking => [
+                    String(booking.id),
+                    formatDate(booking.date),
+                    booking.time.substring(0, 5),
+                    tutorName(booking.tutorId),
+                    booking.instrument,
+                    booking.grade == null ? "-" : String(booking.grade),
+                    cancelButton(booking.id)
+                ]));
+        }
+
+        async function cancelBooking(bookingId) {
+            const result = await send("/bookings/" + bookingId + "?matric=" + encodeURIComponent(value("matric")),
+                { method: "DELETE" });
+            if (!result) {
+                return;
+            }
+            if (!result.ok) {
+                showMessage(errorText(result), true);
+                return;
+            }
+            showMessage("Booking cancelled", false);
+            await showBookings();
+        }
+
+        async function showTutorBookings() {
+            const container = document.getElementById("tutorBookings");
+            container.innerHTML = "";
+            const url = "/tutors/" + encodeURIComponent(value("tutorSelect")) +
+                "/bookings?date=" + encodeURIComponent(value("tutorDate"));
+            const result = await send(url, { headers: { "Authorization": "Bearer " + value("tutorKey") } });
+            if (!result) {
+                return;
+            }
+            if (!result.ok) {
+                showMessage(errorText(result), true);
+                return;
+            }
+            if (result.body.length === 0) {
+                container.textContent = "No bookings for this tutor on that day";
+                return;
+            }
+            renderTable(container, ["Time", "Pupil", "Age", "Matriculation", "Instrument", "Grade"],
+                result.body.map(booking => [
+                    booking.time.substring(0, 5),
+                    booking.name,
+                    booking.age == null ? "-" : String(booking.age),
+                    booking.matric,
+                    booking.instrument,
+                    booking.grade == null ? "-" : String(booking.grade)
+                ]));
+        }
+
+        document.getElementById("slotDate").value = todayIso();
+        document.getElementById("tutorDate").value = todayIso();
+        showView("pupil");
+        loadTutors();
+    </script>
+    </body>
+    </html>
