@@ -1,0 +1,10 @@
+lessons\music_lessons\model\Tutor.class
+lessons\music_lessons\MusicLessonsApplication.class
+lessons\music_lessons\model\Booking.class
+lessons\music_lessons\model\Slot.class
+lessons\music_lessons\model\Pupil.class
+lessons\music_lessons\service\BookingService.class
+lessons\music_lessons\controller\TutorController.class
+lessons\music_lessons\service\PupilTrackerClient$TrackerResponse.class
+lessons\music_lessons\controller\LessonController.class
+lessons\music_lessons\service\PupilTrackerClient.class
